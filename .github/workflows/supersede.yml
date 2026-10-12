@@ -1,0 +1,66 @@
+name: supersede
+
+# When CI succeeds on a bot Chatto bump, close the older open chatto-update
+# PRs it supersedes, comment with a link to the newer PR, and delete their
+# branches.
+#
+# Only PRs authored by github-actions[bot] on chatto-update/ count. PRs
+# labelled `hold` are never closed. "Older" = lower PR number. Runs the
+# workflow file from the default branch and never checks out PR code.
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: supersede
+  cancel-in-progress: false
+
+jobs:
+  supersede:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      startsWith(github.event.workflow_run.head_branch, 'chatto-update/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+    steps:
+      - name: Close superseded update PRs
+        run: |
+          set -euo pipefail
+          is_update='(.author.login == "app/github-actions" or .author.login == "github-actions[bot]")
+                     and (.headRefName | test("^chatto-update/"))
+                     and .baseRefName == "main"'
+
+          new="$(gh pr list --state open --head "$HEAD_BRANCH" \
+                   --json number,headRefName,headRefOid,baseRefName,author,url \
+                   --jq "[.[] | select($is_update)] | first // empty")"
+          if [ -z "$new" ]; then echo "No open bot update PR for $HEAD_BRANCH; nothing to do."; exit 0; fi
+          new_n="$(jq -r .number <<<"$new")"; new_url="$(jq -r .url <<<"$new")"
+          if [ "$(jq -r .headRefOid <<<"$new")" != "$HEAD_SHA" ]; then
+            echo "CI result is for $HEAD_SHA but PR #$new_n head is now $(jq -r .headRefOid <<<"$new"); skipping."; exit 0
+          fi
+          echo "Newer PR #$new_n passed CI: $RUN_URL"
+
+          gh pr list --state open --base main --limit 100 \
+            --json number,headRefName,baseRefName,author,labels \
+            --jq ".[] | select($is_update) | select(.number < $new_n)
+                       | select([.labels[].name] | index(\"hold\") | not)
+                       | \"\(.number) \(.headRefName)\"" |
+          while read -r n branch; do
+            echo "closing #$n ($branch), superseded by #$new_n"
+            gh pr close "$n" --delete-branch --comment \
+              "Superseded by #$new_n ($new_url), a newer Chatto release pin whose CI passed ([run]($RUN_URL)). Closing automatically; label a PR \`hold\` to keep it open."
+            echo "- closed #$n (\`$branch\`) → superseded by #$new_n" >> "$GITHUB_STEP_SUMMARY"
+          done

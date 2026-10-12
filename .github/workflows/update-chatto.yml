@@ -1,0 +1,119 @@
+name: update-chatto
+
+# Daily check for a newer stable chattocorp/chatto release. Pre-releases,
+# including the 0.5 beta line, are ignored: GitHub /releases/latest is the
+# latest non-prerelease. Opens or updates one PR per version on
+# chatto-update/vX.Y.Z. Does not auto-merge.
+#
+# A PR labelled `hold` is left alone. When a newer chatto-update PR passes
+# CI, supersede.yml closes the older one. Bot PRs do not trigger
+# pull_request, so this dispatches ci.yml on the branch.
+
+on:
+  schedule:
+    - cron: "17 10 * * *" # daily, 10:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write # dispatch ci.yml on the bot branch
+  issues: write # labels
+
+concurrency:
+  group: update-chatto
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Bump package.nix when a stable release is newer
+        id: bump
+        run: python3 .github/scripts/update-chatto.py
+
+      - name: Open or update the pull request
+        if: steps.bump.outputs.updated == 'true'
+        env:
+          FROM: ${{ steps.bump.outputs.from }}
+          TO: ${{ steps.bump.outputs.to }}
+          RELEASE_URL: ${{ steps.bump.outputs.release_url }}
+        run: |
+          set -euo pipefail
+          branch="chatto-update/v${TO}"
+
+          if gh pr list --state open --head "$branch" --json labels \
+               --jq 'any(.[]; [.labels[].name] | index("hold"))' | grep -qx true; then
+            echo "PR for $branch is labelled hold; leaving it."
+            exit 0
+          fi
+
+          git fetch origin main
+          have_branch=0
+          if git fetch origin "+refs/heads/${branch}:refs/remotes/origin/${branch}"; then
+            have_branch=1
+          fi
+
+          # Already one commit ahead of current main, and that commit only
+          # changes package.nix to the bytes we just wrote.
+          if [ "$have_branch" = 1 ] \
+             && [ "$(git merge-base origin/main "origin/$branch")" = "$(git rev-parse origin/main)" ] \
+             && [ "$(git diff --name-only origin/main "origin/$branch")" = "package.nix" ] \
+             && git diff --quiet "origin/$branch" -- package.nix; then
+            echo "$branch already has this pin on current main."
+            exit 0
+          fi
+
+          updated=$(mktemp)
+          cp package.nix "$updated"
+          git checkout -- package.nix
+          git checkout -B "$branch" origin/main
+          cp "$updated" package.nix
+          rm "$updated"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.nix
+          if git diff --cached --quiet; then
+            echo "no change against main"
+            exit 0
+          fi
+          git commit -m "chatto: ${FROM} -> ${TO}"
+          if [ "$have_branch" = 1 ]; then
+            git push --force-with-lease="refs/heads/${branch}:refs/remotes/origin/${branch}" \
+              origin "HEAD:refs/heads/${branch}"
+          else
+            git push -u origin "HEAD:refs/heads/${branch}"
+          fi
+
+          body=$(mktemp)
+          cat > "$body" <<EOF
+          Automated bump of the Chatto release binary in \`package.nix\`.
+
+          ${FROM} -> ${TO}
+
+          Release: ${RELEASE_URL}
+
+          Stable releases only (\`/releases/latest\`). Pre-releases, including the 0.5 beta line, are not proposed. This does not auto-merge. Label \`hold\` to keep this PR open when a newer one passes CI.
+
+          CI is dispatched on this branch because a \`GITHUB_TOKEN\` push does not trigger \`pull_request\`.
+          EOF
+
+          existing="$(gh pr list --state open --head "$branch" --json number --jq '.[0].number // empty')"
+          if [ -z "$existing" ]; then
+            gh pr create --base main --head "$branch" \
+              --title "chatto: ${FROM} -> ${TO}" \
+              --body-file "$body" \
+              --label dependencies \
+              --label needs-review
+          else
+            echo "updated existing PR #$existing"
+          fi
+          gh workflow run ci.yml --ref "$branch"
