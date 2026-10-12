@@ -31,7 +31,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # determinate: true also logs the job in to FlakeHub.
       - uses: DeterminateSystems/nix-installer-action@v23
+        with:
+          determinate: false
 
       - name: Build Chatto
         run: |
