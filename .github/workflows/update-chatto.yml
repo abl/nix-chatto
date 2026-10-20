@@ -1,8 +1,9 @@
 name: update-chatto
 
 # Daily check for a newer stable chattocorp/chatto release. Pre-releases,
-# including the 0.5 beta line, are ignored: GitHub /releases/latest is the
-# latest non-prerelease. Opens or updates one PR per version on
+# including the 0.5 beta line, are ignored. The script pages /releases and
+# picks the highest non-draft, non-prerelease vX.Y.Z tag (monorepo sub-package
+# tags like pkg/events/v0.1.0 are skipped). Opens or updates one PR per version on
 # chatto-update/vX.Y.Z. Does not auto-merge.
 #
 # A PR labelled `hold` is left alone. When a newer chatto-update PR passes
@@ -101,7 +102,7 @@ jobs:
 
           Release: ${RELEASE_URL}
 
-          Stable releases only (\`/releases/latest\`). Pre-releases, including the 0.5 beta line, are not proposed. This does not auto-merge. Label \`hold\` to keep this PR open when a newer one passes CI.
+          Stable vX.Y.Z releases only. Pre-releases, including the 0.5 beta line, are not proposed. This does not auto-merge. Label \`hold\` to keep this PR open when a newer one passes CI.
 
           CI is dispatched on this branch because a \`GITHUB_TOKEN\` push does not trigger \`pull_request\`.
           EOF

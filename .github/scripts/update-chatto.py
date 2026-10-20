@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Point package.nix at the latest stable chattocorp/chatto release.
 
-Stable means GitHub's /releases/latest: the newest release that is not a
-draft and not a pre-release. The 0.5 beta line is ignored until upstream
-marks a release stable.
+Stable means the highest release, by X.Y.Z, that is not a draft, not a
+pre-release, and has a tag matching vX.Y.Z. Releases are paged from
+/releases rather than /releases/latest, because upstream is a monorepo and
+"latest" can be a sub-package tag such as pkg/events/v0.1.0. Other tags are
+ignored. The 0.5 beta line is ignored until upstream marks a release stable.
 
 Rewrites `version` and the x86_64-linux / aarch64-linux fetchurl hashes in
 package.nix. Each hash is the sha256 SRI of that release tarball, and
@@ -62,6 +64,33 @@ def fetch(url, timeout):
 
 def github_json(url):
     return json.loads(fetch(url, 60).decode("utf-8"))
+
+
+STABLE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+MAX_PAGES = 5
+
+
+def latest_stable_release():
+    """Highest non-draft, non-prerelease release tagged vX.Y.Z."""
+    best = None
+    for page in range(1, MAX_PAGES + 1):
+        releases = github_json(
+            f"https://api.github.com/repos/{REPO}/releases?per_page=100&page={page}"
+        )
+        for release in releases:
+            if release.get("draft") or release.get("prerelease"):
+                continue
+            match = STABLE_TAG_RE.match(release.get("tag_name") or "")
+            if not match:
+                continue
+            key = tuple(int(part) for part in match.groups())
+            if best is None or key > best[0]:
+                best = (key, release)
+        if len(releases) < 100:
+            break
+    if best is None:
+        raise SystemExit(f"no stable vX.Y.Z release found for {REPO}")
+    return best[1]
 
 
 def checksum_for(text, filename):
@@ -179,9 +208,7 @@ def main():
     pinned, _ = read_pin(original)
     pinned_tuple = parse_version(pinned)
 
-    release = github_json(f"https://api.github.com/repos/{REPO}/releases/latest")
-    if release.get("draft") or release.get("prerelease"):
-        raise SystemExit(f"{release.get('tag_name')} is not a stable release")
+    release = latest_stable_release()
     tag = release["tag_name"]
     version = tag[1:] if tag.startswith("v") else tag
     latest = parse_version(version)
