@@ -3,11 +3,11 @@
   stdenv,
   fetchurl,
 }: let
-  version = "0.4.26";
+  version = "0.5.0";
 
   hashes = {
-    x86_64-linux = "sha256-uwU4ddExTUDh6x3sGx0tp3X/cyPXavC6EQqN6zYhGFI=";
-    aarch64-linux = "sha256-ZB/Ggb0jA/ulhNGCVQO4N6Smu8JgcSOxXPvi7FrhguE=";
+    x86_64-linux = "sha256-zI5sQmce7OA2rBIZWOyAJEIR9JxZk+JL1yv/Qymza6o=";
+    aarch64-linux = "sha256-6ZVXBglyUpF0y9sIv63dMLGqI92HyTNMloANbGQJjWY=";
   };
 
   archSuffix = {
